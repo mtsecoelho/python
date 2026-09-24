@@ -1,0 +1,122 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: flask-s2i-template
+objects:
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: ${APP_NAME}
+
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      name: ${APP_NAME}
+    spec:
+      successfulBuildsHistoryLimit: 5
+      source:
+        type: Git
+        git:
+          uri: ${GIT_REPOSITORY_URL}
+          ref: main
+        contextDir: /
+      runPolicy: Serial
+      strategy:
+        type: Source
+        sourceStrategy:
+          from:
+            kind: ImageStreamTag
+            name: 'python:3.12-minimal-ubi10'
+            namespace: openshift
+      output:
+        to:
+          kind: ImageStreamTag
+          name: '${APP_NAME}:latest'
+      triggers:
+        - type: ImageChange
+        - type: ConfigChange
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${APP_NAME}
+      annotations:
+        image.openshift.io/triggers: |-
+          [
+            {
+              "from": {
+                "kind": "ImageStreamTag",
+                "name": "${APP_NAME}:latest"
+              },
+              "fieldPath": "spec.template.spec.containers[0].image"
+            }
+          ]
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+        spec:
+          containers:
+            - name: ${APP_NAME}
+              image: '${APP_NAME}:latest'
+              ports:
+                - containerPort: 8080
+              resources:
+                limits:
+                  cpu: '500m'
+                  memory: 512Mi
+                requests:
+                  cpu: '100m'
+                  memory: 256Mi
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: 8080
+                initialDelaySeconds: 15
+                periodSeconds: 10
+                timeoutSeconds: 2
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: 8080
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                timeoutSeconds: 2
+                successThreshold: 1
+                failureThreshold: 3
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}
+    spec:
+      ports:
+        - port: 8080
+          targetPort: 8080
+      selector:
+        app: ${APP_NAME}
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: ${APP_NAME}
+    spec:
+      to:
+        kind: Service
+        name: ${APP_NAME}
+      port:
+        targetPort: 8080
+
+parameters:
+  - name: APP_NAME
+    value: flask-app
+    required: true
+  - name: GIT_REPOSITORY_URL
+    description: URL of your Flask Git Repository
+    required: true
